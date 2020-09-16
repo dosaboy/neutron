@@ -36,6 +36,8 @@ class LocalDVRSubnetMapping(object):
     def __init__(self, subnet, csnat_ofport=constants.OFPORT_INVALID):
         # set of compute ports on this dvr subnet
         self.compute_ports = {}
+        # set of dvr router interfaces on this subnet
+        self.dvr_ports = {}
         self.subnet = subnet
         self.csnat_ofport = csnat_ofport
         self.dvr_owned = False
@@ -73,6 +75,15 @@ class LocalDVRSubnetMapping(object):
     def get_csnat_ofport(self):
         return self.csnat_ofport
 
+    def add_dvr_ofport(self, vif_id, ofport):
+        self.dvr_ports[vif_id] = ofport
+
+    def remove_dvr_ofport(self, vif_id):
+        self.dvr_ports.pop(vif_id, 0)
+
+    def get_dvr_ofports(self):
+        return self.dvr_ports
+
 
 class OVSPort(object):
     def __init__(self, id, ofport, mac, device_owner):
@@ -81,6 +92,8 @@ class OVSPort(object):
         self.ofport = ofport
         self.subnets = set()
         self.device_owner = device_owner
+        # Currently, this is updated only for DVR router interfaces
+        self.ips = {}
 
     def __str__(self):
         return ("OVSPort: id = %s, ofport = %s, mac = %s, "
@@ -93,9 +106,11 @@ class OVSPort(object):
 
     def remove_subnet(self, subnet_id):
         self.subnets.remove(subnet_id)
+        self.ips.pop(subnet_id, None)
 
     def remove_all_subnets(self):
         self.subnets.clear()
+        self.ips = {}
 
     def get_subnets(self):
         return self.subnets
@@ -108,6 +123,15 @@ class OVSPort(object):
 
     def get_ofport(self):
         return self.ofport
+
+    def add_ip(self, subnet_id, ip):
+        if subnet_id in self.ips:
+            self.ips[subnet_id].append(ip)
+        else:
+            self.ips[subnet_id] = [ip]
+
+    def get_ip(self, subnet_id):
+        return self.ips.get(subnet_id, None)
 
 
 @profiler.trace_cls("ovs_dvr_agent")
@@ -485,7 +509,9 @@ class OVSDVRNeutronAgent(object):
         ovsport = OVSPort(port.vif_id, port.ofport,
                           port.vif_mac, device_owner)
         ovsport.add_subnet(subnet_uuid)
+        ovsport.add_ip(subnet_uuid, fixed_ip['ip_address'])
         self.local_ports[port.vif_id] = ovsport
+        ldm.add_dvr_ofport(port.vif_id, port.ofport)
 
     def _bind_port_on_dvr_subnet(self, port, lvm, fixed_ips,
                                  device_owner):
@@ -643,17 +669,34 @@ class OVSDVRNeutronAgent(object):
             ldm = self.local_dvr_map[sub_uuid]
             subnet_info = ldm.get_subnet_info()
             ip_version = subnet_info['ip_version']
-            # DVR is no more owner
-            ldm.set_dvr_owned(False)
-            # remove all vm rules for this dvr subnet
-            # clear of compute_ports altogether
-            compute_ports = ldm.get_compute_ofports()
-            for vif_id in compute_ports:
-                comp_port = self.local_ports[vif_id]
-                self.int_br.delete_dvr_to_src_mac(
-                    network_type=network_type,
-                    vlan_tag=vlan_to_use, dst_mac=comp_port.get_mac())
-            ldm.remove_all_compute_ofports()
+
+            fixed_ip = ovsport.get_ip(sub_uuid)
+            is_dvr_gateway_port = False
+            is_subnet_gateway_unset = False
+            if subnet_info['gateway_ip'] is None:
+                is_subnet_gateway_unset = True
+            if subnet_info['gateway_ip'] and fixed_ip:
+                # since distributed router port must have only one fixed
+                # IP, directly use fixed_ips[0]
+                if fixed_ip[0] == subnet_info['gateway_ip']:
+                    is_dvr_gateway_port = True
+
+            # remove vm dvr src mac rules only if the ovsport
+            # is gateway for the subnet or if the gateway is
+            # not set on the subnet
+            if is_dvr_gateway_port or is_subnet_gateway_unset:
+                # DVR is no more owner
+                ldm.set_dvr_owned(False)
+                # remove all vm rules for this dvr subnet
+                # clear of compute_ports altogether
+                compute_ports = ldm.get_compute_ofports()
+                for vif_id in compute_ports:
+                    comp_port = self.local_ports[vif_id]
+                    self.int_br.delete_dvr_to_src_mac(
+                        network_type=network_type,
+                        vlan_tag=vlan_to_use, dst_mac=comp_port.get_mac())
+                ldm.remove_all_compute_ofports()
+
             # If ARP Responder enabled, remove the rule that redirects
             # the dvr_mac_address destination to the router port, since
             # the router port is removed or unbound.
@@ -664,7 +707,8 @@ class OVSDVRNeutronAgent(object):
                     gateway_mac=port.vif_mac,
                     dvr_mac=self.dvr_mac_address,
                     rtr_port=port.ofport)
-            if ldm.get_csnat_ofport() == constants.OFPORT_INVALID:
+            if ldm.get_csnat_ofport() == constants.OFPORT_INVALID and len(
+                    ldm.get_dvr_ofports()) == 1:
                 # if there is no csnat port for this subnet, remove
                 # this subnet from local_dvr_map, as no dvr (or) csnat
                 # ports available on this agent anymore
@@ -682,6 +726,7 @@ class OVSDVRNeutronAgent(object):
                 br.delete_dvr_process_ipv6(
                     vlan_tag=lvm.vlan, gateway_mac=subnet_info['gateway_mac'])
             ovsport.remove_subnet(sub_uuid)
+            ldm.remove_dvr_ofport(port.vif_id)
 
             if self.firewall and isinstance(self.firewall,
                                             ovs_firewall.OVSFirewallDriver):
