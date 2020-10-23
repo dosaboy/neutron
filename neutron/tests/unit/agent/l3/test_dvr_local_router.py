@@ -17,7 +17,6 @@ from unittest import mock
 from neutron_lib.api.definitions import portbindings
 from neutron_lib import constants as lib_constants
 from oslo_config import cfg
-from oslo_log import log
 from oslo_utils import uuidutils
 
 from neutron.agent.l3 import agent as l3_agent
@@ -46,19 +45,18 @@ class TestDvrRouterOperations(base.BaseTestCase):
     def setUp(self):
         super(TestDvrRouterOperations, self).setUp()
         mock.patch('eventlet.spawn').start()
-        self.conf = agent_config.setup_conf()
-        self.conf.register_opts(base_config.core_opts)
-        log.register_options(self.conf)
-        self.conf.register_opts(agent_config.AGENT_STATE_OPTS, 'AGENT')
-        l3_config.register_l3_agent_config_opts(l3_config.OPTS, self.conf)
-        ha_conf.register_l3_agent_ha_opts(self.conf)
-        agent_config.register_interface_driver_opts_helper(self.conf)
-        agent_config.register_process_monitor_opts(self.conf)
-        agent_config.register_interface_opts(self.conf)
-        agent_config.register_external_process_opts(self.conf)
-        self.conf.set_override('interface_driver',
-                               'neutron.agent.linux.interface.NullDriver')
-        self.conf.set_override('state_path', cfg.CONF.state_path)
+        cfg.CONF.register_opts(base_config.core_opts)
+        cfg.CONF.register_opts(agent_config.AGENT_STATE_OPTS, 'AGENT')
+        l3_config.register_l3_agent_config_opts(l3_config.OPTS, cfg.CONF)
+        ha_conf.register_l3_agent_ha_opts(cfg.CONF)
+        agent_config.register_interface_driver_opts_helper(cfg.CONF)
+        agent_config.register_process_monitor_opts(cfg.CONF)
+        agent_config.register_interface_opts(cfg.CONF)
+        agent_config.register_external_process_opts(cfg.CONF)
+        cfg.CONF.set_override('interface_driver',
+                              'neutron.agent.linux.interface.NullDriver')
+        cfg.CONF.set_override('state_path', cfg.CONF.state_path)
+        cfg.CONF.set_override('keepalived_templates_path', 'etc/neutron')
 
         self.device_exists_p = mock.patch(
             'neutron.agent.linux.ip_lib.device_exists')
@@ -142,18 +140,18 @@ class TestDvrRouterOperations(base.BaseTestCase):
                                            'prefixlen': 16}],
                             'id': _uuid(), 'device_id': _uuid()}]
 
-        self.ri_kwargs = {'agent_conf': self.conf,
+        self.ri_kwargs = {'agent_conf': cfg.CONF,
                           'interface_driver': self.mock_driver}
 
     def _create_router(self, router=None, **kwargs):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         self.router_id = _uuid()
         if not router:
             router = mock.MagicMock()
         kwargs['agent'] = agent
         kwargs['router_id'] = self.router_id
         kwargs['router'] = router
-        kwargs['agent_conf'] = self.conf
+        kwargs['agent_conf'] = cfg.CONF
         kwargs['interface_driver'] = mock.Mock()
         with mock.patch.object(dvr_router.DvrLocalRouter,
                                'load_used_fip_information'):
@@ -263,7 +261,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
                 kwargs = {'agent': mock_agent,
                           'router_id': _uuid(),
                           'router': mock.Mock(),
-                          'agent_conf': self.conf,
+                          'agent_conf': cfg.CONF,
                           'interface_driver': mock.Mock()}
                 router = dvr_router.DvrLocalRouter(HOSTNAME, **kwargs)
                 self.assertEqual({'15.1.2.3': ('192.168.0.1', 1234)},
@@ -538,7 +536,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         self.assertEqual(0x40001BD6, snat_idx)
 
     def test__set_subnet_arp_info(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         router['distributed'] = True
         self._set_ri_kwargs(agent, router['id'], router)
@@ -580,7 +578,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         self.mock_ip_dev.neigh.add.never_called()
 
     def test_add_arp_entry(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         router['distributed'] = True
         subnet_id = l3_test_common.get_subnet_id(
@@ -597,7 +595,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
             '1.7.23.11', '00:11:22:33:44:55')
 
     def test_add_arp_entry_no_routerinfo(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         subnet_id = l3_test_common.get_subnet_id(
             router[lib_constants.INTERFACE_KEY][0])
@@ -618,7 +616,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         self.assertFalse(f.call_count)
 
     def _setup_test_for_arp_entry_cache(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         router['distributed'] = True
         self._set_ri_kwargs(agent, router['id'], router)
@@ -660,7 +658,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         self.assertEqual(0, len(ri._pending_arp_set))
 
     def test_del_arp_entry(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         router['distributed'] = True
         subnet_id = l3_test_common.get_subnet_id(
@@ -699,7 +697,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         router = l3_test_common.prepare_router_data(enable_snat=True)
         router[lib_constants.FLOATINGIP_AGENT_INTF_KEY] = agent_gateway_port
         router['distributed'] = True
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         self._set_ri_kwargs(agent, router['id'], router)
         ri = dvr_router.DvrLocalRouter(HOSTNAME, **self.ri_kwargs)
         self.assertEqual(
@@ -724,7 +722,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         router = l3_test_common.prepare_router_data(enable_snat=True)
         router[lib_constants.FLOATINGIP_KEY] = fake_floatingips['floatingips']
         router['distributed'] = True
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         self._set_ri_kwargs(agent, router['id'], router)
         ri = dvr_router.DvrLocalRouter(HOSTNAME, **self.ri_kwargs)
         ri.iptables_manager.ipv4['nat'] = mock.MagicMock()
@@ -744,7 +742,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
     def _test_ext_gw_updated_dvr_agent_mode(self, host,
                                             agent_mode, expected_call_count):
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         self._set_ri_kwargs(agent, router['id'], router)
         ri = dvr_router.DvrLocalRouter(HOSTNAME, **self.ri_kwargs)
 
@@ -771,7 +769,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
                                                  'dvr', 0)
 
     def test_external_gateway_removed_ext_gw_port_and_fip(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         agent.conf.agent_mode = lib_constants.L3_AGENT_MODE_DVR_SNAT
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         router['gw_port_host'] = HOSTNAME
@@ -848,7 +846,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
     @mock.patch.object(dvr_router.DvrLocalRouter, '_handle_router_snat_rules')
     def test_handle_snat_rule_for_centralized_fip(
             self, _add_snat_rules, _handle_router_snat_rules):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         agent.conf.agent_mode = lib_constants.L3_AGENT_MODE_DVR_SNAT
         self.mock_driver.unplug.reset_mock()
 
@@ -868,7 +866,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
     def test_add_centralized_floatingip_dvr_ha(
             self,
             super_add_centralized_floatingip):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         agent.conf.agent_mode = lib_constants.L3_AGENT_MODE_DVR_SNAT
         router = l3_test_common.prepare_router_data(
             num_internal_ports=2, enable_ha=True)
@@ -914,7 +912,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
                        'remove_centralized_floatingip')
     def test_remove_centralized_floatingip(self,
                                 super_remove_centralized_floatingip):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         agent.conf.agent_mode = lib_constants.L3_AGENT_MODE_DVR_SNAT
         router = l3_test_common.prepare_router_data(num_internal_ports=2)
         router['gw_port_host'] = HOSTNAME
@@ -937,7 +935,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         super_remove_centralized_floatingip.assert_called_once_with(fip_cidr)
 
     def test_initialize_dvr_ha_router_snat_ns_once(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         agent.conf.agent_mode = lib_constants.L3_AGENT_MODE_DVR_SNAT
         router = l3_test_common.prepare_router_data(
             num_internal_ports=2, enable_ha=True)
@@ -955,7 +953,7 @@ class TestDvrRouterOperations(base.BaseTestCase):
         ri._create_snat_namespace.assert_called_once_with()
 
     def test_initialize_dvr_ha_router_reset_state(self):
-        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent = l3_agent.L3NATAgent(HOSTNAME, cfg.CONF)
         agent.conf.agent_mode = lib_constants.L3_AGENT_MODE_DVR_SNAT
         router = l3_test_common.prepare_router_data(
             num_internal_ports=2, enable_ha=True)

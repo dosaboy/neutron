@@ -1,0 +1,7 @@
+---
+features:
+  - |
+    The keepalived config is now generated via a jinja template. The template
+    is available to be edited in the neutron configuration directory. A config
+    option ``keepalived_templates_path`` is added to point to the location of the j2
+    template.

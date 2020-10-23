@@ -106,6 +106,9 @@ OPTS = [
                        'the state change monitor. NOTE: Setting to True '
                        'could affect the data plane when stopping or '
                        'restarting the L3 agent.')),
+    cfg.StrOpt('keepalived_templates_path',
+               default='/etc/neutron/',
+               help=_('Location to store keepalived config template files')),
     cfg.BoolOpt('keepalived_use_no_track',
                 default=True,
                 deprecated_for_removal=True,

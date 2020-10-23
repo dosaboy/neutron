@@ -1,0 +1,62 @@
+global_defs {
+    notification_email_from {{ email_from }}
+    router_id {{ router_id }}
+}
+{% for instance in instances -%}
+{% if instance.track_script -%}
+vrrp_script {{ health_check_name }}_{{ instance.track_script.vr_id }} {
+    script "{{ instance.track_script._get_script_location() }}"
+    interval {{ instance.track_script.interval }}
+    fall 2
+    rise 2
+}
+{% endif -%}
+vrrp_instance {{ instance.name }} {
+    state {{ instance.state }}
+    interface {{ instance.interface }}
+    virtual_router_id {{ instance.vrouter_id }}
+    priority {{ instance.priority }}
+    garp_master_delay {{ instance.garp_primary_delay }}
+    {% if instance.nopreempt -%}
+    nopreempt
+    {% endif -%}
+    {% if instance.advert_int -%}
+    advert_int {{ instance.advert_int }}
+    {% endif -%}
+    {% if instance.authentication -%}
+    authentication {
+        auth_type {{ instance.authentication[0] }}
+        auth_pass {{ instance.authentication[1] }}
+    }
+    {% endif -%}
+    {% if instance.mcast_src_ip -%}
+    mcast_src_ip {{ instance.mcast_src_ip }}
+    {% endif -%}
+    {% if instance.track_interfaces -%}
+    track_interface {
+        {% for interface in instance.track_interfaces -%}
+        {{ interface }}{% endfor %}
+    }
+    {% endif -%}
+    virtual_ipaddress {
+        {{ instance.get_primary_vip_config() }}
+    }
+    {% if instance.vips -%}
+    virtual_ipaddress_excluded {
+        {%- for vip in instance.get_vips_sorted() %}
+        {{ vip.build_config() }}{% endfor %}
+    }
+    {% endif -%}
+    {% if instance.virtual_routes -%}
+    virtual_routes {
+        {%- for route in instance.virtual_routes.routes %}
+        {{ route.build_config() }}{% endfor %}
+    }
+    {% endif -%}
+    {% if instance.track_script and instance.track_script._is_needed() -%}
+    track_script {
+        {{ health_check_name }}_{{ instance.track_script.vr_id }}
+    }
+    {% endif -%}
+}
+{% endfor %}
