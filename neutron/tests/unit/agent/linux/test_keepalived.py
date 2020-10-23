@@ -35,9 +35,90 @@ KEEPALIVED_GLOBAL_CONFIG = textwrap.dedent("""\
     global_defs {
         notification_email_from %(email_from)s
         router_id %(router_id)s
-    }""") % dict(
-        email_from=keepalived.KEEPALIVED_EMAIL_FROM,
-        router_id=keepalived.KEEPALIVED_ROUTER_ID)
+    }
+    """) % dict(email_from=keepalived.KEEPALIVED_EMAIL_FROM,
+                router_id=keepalived.KEEPALIVED_ROUTER_ID)
+KEEPALIVED_VR_1_CONFIG = textwrap.dedent("""\
+    vrrp_instance VR_1 {
+        state MASTER
+        interface eth0
+        virtual_router_id 1
+        priority 50
+        garp_master_delay 60""")
+KEEPALIVED_VR_1_TRACK_IF = """
+    advert_int 5
+    authentication {
+        auth_type AH
+        auth_pass pass123
+    }
+    track_interface {
+        eth0
+    }"""
+KEEPALIVED_VR_1_VIP = """
+    virtual_ipaddress {
+        169.254.0.1/24 dev eth0
+    }"""
+KEEPALIVED_VR_1_VIPEX_x4 = """
+    virtual_ipaddress_excluded {{
+        192.168.1.0/24 dev eth1{notrk}
+        192.168.2.0/24 dev eth2{notrk}
+        192.168.3.0/24 dev eth2{notrk}
+        192.168.55.0/24 dev eth10{notrk}
+    }}"""
+KEEPALIVED_VR_1_VIPEX_x1 = """
+    virtual_ipaddress_excluded {{
+        192.168.1.0/24 dev eth1{notrk}
+    }}"""
+KEEPALIVED_VR_1_VRTS_A = """
+    virtual_routes {{
+        0.0.0.0/0 via 192.168.1.1 dev eth1{notrk}
+    }}"""
+KEEPALIVED_VR_1_VRTS_B = """
+    virtual_routes {{
+        12.0.0.0/24 via 10.0.0.1{notrk}
+    }}"""
+KEEPALIVED_VR_1_TRACK_SCRIPT = """
+    track_script {
+        ha_health_check_1
+    }"""
+KEEPALIVED_VR_1_CLOSE = """
+    }"""
+KEEPALIVED_VR_2_CONFIG = textwrap.dedent("""
+    vrrp_instance VR_2 {
+        state MASTER
+        interface eth4
+        virtual_router_id 2
+        priority 50
+        garp_master_delay 60
+        mcast_src_ip 224.0.0.1""")
+KEEPALIVED_VR_2_TRACK_IF = """
+    track_interface {
+        eth4
+    }"""
+KEEPALIVED_VR_2_VIP = """
+    virtual_ipaddress {
+        169.254.0.2/24 dev eth4
+    }"""
+KEEPALIVED_VR_2_VIPEX = """
+    virtual_ipaddress_excluded {{
+        192.168.2.0/24 dev eth2{notrk}
+        192.168.3.0/24 dev eth6{notrk}
+        192.168.55.0/24 dev eth10{notrk}
+    }}"""
+KEEPALIVED_VR_2_CLOSE = """
+    }
+"""
+KEEPALIVED_TRACK_SCRIPT = """\
+vrrp_script ha_health_check_1 {
+    script "/etc/ha_confs/qrouter-x/ha_check_script_1.sh"
+    interval 5
+    fall 2
+    rise 2
+}
+"""
+
+NOTRACK = ' no_track'
+
 VRRP_ID = 1
 VRRP_INTERVAL = 5
 
@@ -47,6 +128,7 @@ class KeepalivedBaseTestCase(base.BaseTestCase):
     def setUp(self):
         super(KeepalivedBaseTestCase, self).setUp()
         l3_config.register_l3_agent_config_opts(l3_config.OPTS, cfg.CONF)
+        cfg.CONF.set_override('keepalived_templates_path', 'etc/neutron')
 
 
 class KeepalivedGetFreeRangeTestCase(KeepalivedBaseTestCase):
@@ -85,7 +167,7 @@ class KeepalivedGetFreeRangeTestCase(KeepalivedBaseTestCase):
 
 class KeepalivedConfBaseMixin(object):
 
-    def _get_config(self):
+    def _get_config(self, with_vips=True):
         config = keepalived.KeepalivedConf()
 
         instance1 = keepalived.KeepalivedInstance('MASTER', 'eth0', 1,
@@ -94,22 +176,24 @@ class KeepalivedConfBaseMixin(object):
         instance1.set_authentication('AH', 'pass123')
         instance1.track_interfaces.append("eth0")
 
-        vip_address1 = keepalived.KeepalivedVipAddress('192.168.1.0/24',
-                                                       'eth1', track=False)
+        if with_vips:
+            vip_address1 = keepalived.KeepalivedVipAddress('192.168.1.0/24',
+                                                           'eth1', track=False)
 
-        vip_address2 = keepalived.KeepalivedVipAddress('192.168.2.0/24',
-                                                       'eth2', track=False)
+            vip_address2 = keepalived.KeepalivedVipAddress('192.168.2.0/24',
+                                                           'eth2', track=False)
 
-        vip_address3 = keepalived.KeepalivedVipAddress('192.168.3.0/24',
-                                                       'eth2', track=False)
+            vip_address3 = keepalived.KeepalivedVipAddress('192.168.3.0/24',
+                                                           'eth2', track=False)
 
-        vip_address_ex = keepalived.KeepalivedVipAddress('192.168.55.0/24',
-                                                         'eth10', track=False)
+            vip_address_ex = keepalived.KeepalivedVipAddress('192.168.55.0/24',
+                                                             'eth10',
+                                                             track=False)
 
-        instance1.vips.append(vip_address1)
-        instance1.vips.append(vip_address2)
-        instance1.vips.append(vip_address3)
-        instance1.vips.append(vip_address_ex)
+            instance1.vips.append(vip_address1)
+            instance1.vips.append(vip_address2)
+            instance1.vips.append(vip_address3)
+            instance1.vips.append(vip_address_ex)
 
         virtual_route = keepalived.KeepalivedVirtualRoute(n_consts.IPv4_ANY,
                                                           "192.168.1.1",
@@ -121,12 +205,13 @@ class KeepalivedConfBaseMixin(object):
                                                   mcast_src_ip='224.0.0.1')
         instance2.track_interfaces.append("eth4")
 
-        vip_address1 = keepalived.KeepalivedVipAddress('192.168.3.0/24',
-                                                       'eth6', track=False)
+        if with_vips:
+            vip_address1 = keepalived.KeepalivedVipAddress('192.168.3.0/24',
+                                                           'eth6', track=False)
 
-        instance2.vips.append(vip_address1)
-        instance2.vips.append(vip_address2)
-        instance2.vips.append(vip_address_ex)
+            instance2.vips.append(vip_address1)
+            instance2.vips.append(vip_address2)
+            instance2.vips.append(vip_address_ex)
 
         config.add_instance(instance1)
         config.add_instance(instance2)
@@ -137,53 +222,18 @@ class KeepalivedConfBaseMixin(object):
 class KeepalivedConfTestCase(KeepalivedBaseTestCase,
                              KeepalivedConfBaseMixin):
 
-    expected = KEEPALIVED_GLOBAL_CONFIG + textwrap.dedent("""
-        vrrp_instance VR_1 {
-            state MASTER
-            interface eth0
-            virtual_router_id 1
-            priority 50
-            garp_master_delay 60
-            advert_int 5
-            authentication {
-                auth_type AH
-                auth_pass pass123
-            }
-            track_interface {
-                eth0
-            }
-            virtual_ipaddress {
-                169.254.0.1/24 dev eth0
-            }
-            virtual_ipaddress_excluded {
-                192.168.1.0/24 dev eth1 no_track
-                192.168.2.0/24 dev eth2 no_track
-                192.168.3.0/24 dev eth2 no_track
-                192.168.55.0/24 dev eth10 no_track
-            }
-            virtual_routes {
-                0.0.0.0/0 via 192.168.1.1 dev eth1 no_track
-            }
-        }
-        vrrp_instance VR_2 {
-            state MASTER
-            interface eth4
-            virtual_router_id 2
-            priority 50
-            garp_master_delay 60
-            mcast_src_ip 224.0.0.1
-            track_interface {
-                eth4
-            }
-            virtual_ipaddress {
-                169.254.0.2/24 dev eth4
-            }
-            virtual_ipaddress_excluded {
-                192.168.2.0/24 dev eth2 no_track
-                192.168.3.0/24 dev eth6 no_track
-                192.168.55.0/24 dev eth10 no_track
-            }
-        }""")
+    expected = KEEPALIVED_GLOBAL_CONFIG + \
+               KEEPALIVED_VR_1_CONFIG + \
+               KEEPALIVED_VR_1_TRACK_IF + \
+               KEEPALIVED_VR_1_VIP + \
+               KEEPALIVED_VR_1_VIPEX_x4.format(notrk=NOTRACK) + \
+               KEEPALIVED_VR_1_VRTS_A.format(notrk=NOTRACK) + \
+               KEEPALIVED_VR_1_CLOSE + \
+               KEEPALIVED_VR_2_CONFIG + \
+               KEEPALIVED_VR_2_TRACK_IF + \
+               KEEPALIVED_VR_2_VIP + \
+               KEEPALIVED_VR_2_VIPEX.format(notrk=NOTRACK) + \
+               KEEPALIVED_VR_2_CLOSE
 
     def test_config_generation(self):
         config = self._get_config()
@@ -205,53 +255,18 @@ class KeepalivedConfTestCase(KeepalivedBaseTestCase,
 
 class KeepalivedConfWithoutNoTrackTestCase(KeepalivedConfTestCase):
 
-    expected = KEEPALIVED_GLOBAL_CONFIG + textwrap.dedent("""
-        vrrp_instance VR_1 {
-            state MASTER
-            interface eth0
-            virtual_router_id 1
-            priority 50
-            garp_master_delay 60
-            advert_int 5
-            authentication {
-                auth_type AH
-                auth_pass pass123
-            }
-            track_interface {
-                eth0
-            }
-            virtual_ipaddress {
-                169.254.0.1/24 dev eth0
-            }
-            virtual_ipaddress_excluded {
-                192.168.1.0/24 dev eth1
-                192.168.2.0/24 dev eth2
-                192.168.3.0/24 dev eth2
-                192.168.55.0/24 dev eth10
-            }
-            virtual_routes {
-                0.0.0.0/0 via 192.168.1.1 dev eth1
-            }
-        }
-        vrrp_instance VR_2 {
-            state MASTER
-            interface eth4
-            virtual_router_id 2
-            priority 50
-            garp_master_delay 60
-            mcast_src_ip 224.0.0.1
-            track_interface {
-                eth4
-            }
-            virtual_ipaddress {
-                169.254.0.2/24 dev eth4
-            }
-            virtual_ipaddress_excluded {
-                192.168.2.0/24 dev eth2
-                192.168.3.0/24 dev eth6
-                192.168.55.0/24 dev eth10
-            }
-        }""")
+    expected = KEEPALIVED_GLOBAL_CONFIG + \
+               KEEPALIVED_VR_1_CONFIG + \
+               KEEPALIVED_VR_1_TRACK_IF + \
+               KEEPALIVED_VR_1_VIP + \
+               KEEPALIVED_VR_1_VIPEX_x4.format(notrk='') + \
+               KEEPALIVED_VR_1_VRTS_A.format(notrk='') + \
+               KEEPALIVED_VR_1_CLOSE + \
+               KEEPALIVED_VR_2_CONFIG + \
+               KEEPALIVED_VR_2_TRACK_IF + \
+               KEEPALIVED_VR_2_VIP + \
+               KEEPALIVED_VR_2_VIPEX.format(notrk='') + \
+               KEEPALIVED_VR_2_CLOSE
 
     def setUp(self):
         super(KeepalivedConfWithoutNoTrackTestCase, self).setUp()
@@ -304,29 +319,6 @@ class KeepalivedInstanceRoutesTestCase(KeepalivedBaseTestCase):
         routes.remove_routes_on_interface('eth1')
         self.assertEqual(len(routes.routes), 2)
 
-    def test_build_config(self):
-        expected = """    virtual_routes {
-        0.0.0.0/0 via 1.0.0.254 dev eth0 no_track
-        ::/0 via fe80::3e97:eff:fe26:3bfa/64 dev eth1 no_track
-        10.0.0.0/8 via 1.0.0.1 no_track
-        20.0.0.0/8 via 2.0.0.2 no_track
-        30.0.0.0/8 dev eth0 scope link no_track
-    }"""
-        routes = self._get_instance_routes()
-        self.assertEqual(expected, '\n'.join(routes.build_config()))
-
-    def test_build_config_without_no_track_option(self):
-        expected = """    virtual_routes {
-        0.0.0.0/0 via 1.0.0.254 dev eth0
-        ::/0 via fe80::3e97:eff:fe26:3bfa/64 dev eth1
-        10.0.0.0/8 via 1.0.0.1
-        20.0.0.0/8 via 2.0.0.2
-        30.0.0.0/8 dev eth0 scope link
-    }"""
-        cfg.CONF.set_override('keepalived_use_no_track', False)
-        routes = self._get_instance_routes()
-        self.assertEqual(expected, '\n'.join(routes.build_config()))
-
 
 class KeepalivedInstanceTestCase(KeepalivedBaseTestCase,
                                  KeepalivedConfBaseMixin):
@@ -340,101 +332,59 @@ class KeepalivedInstanceTestCase(KeepalivedBaseTestCase,
         instance = config.get_instance(1)
         instance.remove_vips_vroutes_by_interface('eth2')
         instance.remove_vips_vroutes_by_interface('eth10')
+        config.add_instance(instance)
 
-        expected = KEEPALIVED_GLOBAL_CONFIG + textwrap.dedent("""
-            vrrp_instance VR_1 {
-                state MASTER
-                interface eth0
-                virtual_router_id 1
-                priority 50
-                garp_master_delay 60
-                advert_int 5
-                authentication {
-                    auth_type AH
-                    auth_pass pass123
-                }
-                track_interface {
-                    eth0
-                }
-                virtual_ipaddress {
-                    169.254.0.1/24 dev eth0
-                }
-                virtual_ipaddress_excluded {
-                    192.168.1.0/24 dev eth1%(no_track)s
-                }
-                virtual_routes {
-                    0.0.0.0/0 via 192.168.1.1 dev eth1%(no_track)s
-                }
-            }
-            vrrp_instance VR_2 {
-                state MASTER
-                interface eth4
-                virtual_router_id 2
-                priority 50
-                garp_master_delay 60
-                mcast_src_ip 224.0.0.1
-                track_interface {
-                    eth4
-                }
-                virtual_ipaddress {
-                    169.254.0.2/24 dev eth4
-                }
-                virtual_ipaddress_excluded {
-                    192.168.2.0/24 dev eth2%(no_track)s
-                    192.168.3.0/24 dev eth6%(no_track)s
-                    192.168.55.0/24 dev eth10%(no_track)s
-                }
-            }""" % {'no_track': no_track_value})
+        expected = KEEPALIVED_GLOBAL_CONFIG + \
+            KEEPALIVED_VR_1_CONFIG + \
+            KEEPALIVED_VR_1_TRACK_IF + \
+            KEEPALIVED_VR_1_VIP + \
+            KEEPALIVED_VR_1_VIPEX_x1.format(notrk=no_track_value) + \
+            KEEPALIVED_VR_1_VRTS_A.format(notrk=no_track_value) + \
+            KEEPALIVED_VR_1_CLOSE + \
+            KEEPALIVED_VR_2_CONFIG + \
+            KEEPALIVED_VR_2_TRACK_IF + \
+            KEEPALIVED_VR_2_VIP + \
+            KEEPALIVED_VR_2_VIPEX.format(notrk=no_track_value) + \
+            KEEPALIVED_VR_2_CLOSE
 
         self.assertEqual(expected, config.get_config_str())
-
-    def test_remove_addresses_by_interface(self):
-        self._test_remove_addresses_by_interface(" no_track")
 
     def test_remove_addresses_by_interface_without_no_track(self):
         cfg.CONF.set_override('keepalived_use_no_track', False)
         self._test_remove_addresses_by_interface("")
 
     def test_build_config_no_vips(self):
-        expected = textwrap.dedent("""\
-            vrrp_instance VR_1 {
-                state MASTER
-                interface eth0
-                virtual_router_id 1
-                priority 50
-                garp_master_delay 60
-                virtual_ipaddress {
-                    169.254.0.1/24 dev eth0
-                }
-            }""")
-        instance = keepalived.KeepalivedInstance(
-            'MASTER', 'eth0', VRRP_ID, ['169.254.192.0/18'])
-        self.assertEqual(expected, os.linesep.join(instance.build_config()))
+        cfg.CONF.set_override('keepalived_use_no_track', False)
+        config = self._get_config(with_vips=False)
+
+        expected = KEEPALIVED_GLOBAL_CONFIG + \
+            KEEPALIVED_VR_1_CONFIG + \
+            KEEPALIVED_VR_1_TRACK_IF + \
+            KEEPALIVED_VR_1_VIP + \
+            KEEPALIVED_VR_1_VRTS_A.format(notrk='') + \
+            KEEPALIVED_VR_1_CLOSE + \
+            KEEPALIVED_VR_2_CONFIG + \
+            KEEPALIVED_VR_2_TRACK_IF + \
+            KEEPALIVED_VR_2_VIP + \
+            KEEPALIVED_VR_2_CLOSE
+
+        self.assertEqual(expected, config.get_config_str())
 
     def test_build_config_no_vips_track_script(self):
-        expected = """
-vrrp_script ha_health_check_1 {
-    script "/etc/ha_confs/qrouter-x/ha_check_script_1.sh"
-    interval 5
-    fall 2
-    rise 2
-}
+        config = keepalived.KeepalivedConf()
 
-vrrp_instance VR_1 {
-    state MASTER
-    interface eth0
-    virtual_router_id 1
-    priority 50
-    garp_master_delay 60
-    virtual_ipaddress {
-        169.254.0.1/24 dev eth0
-    }
-}"""
+        expected = KEEPALIVED_GLOBAL_CONFIG + \
+            KEEPALIVED_TRACK_SCRIPT + \
+            KEEPALIVED_VR_1_CONFIG + \
+            KEEPALIVED_VR_1_VIP + \
+            KEEPALIVED_VR_2_CLOSE
+
         instance = keepalived.KeepalivedInstance(
             'MASTER', 'eth0', VRRP_ID, ['169.254.192.0/18'])
         instance.track_script = keepalived.KeepalivedTrackScript(
             VRRP_INTERVAL, '/etc/ha_confs/qrouter-x', VRRP_ID)
-        self.assertEqual(expected, '\n'.join(instance.build_config()))
+        config.add_instance(instance)
+        self.assertEqual(expected, config.get_config_str())
 
 
 class KeepalivedVipAddressTestCase(KeepalivedBaseTestCase):
@@ -480,28 +430,25 @@ class KeepalivedVirtualRouteTestCase(KeepalivedBaseTestCase):
 
 class KeepalivedTrackScriptTestCase(KeepalivedBaseTestCase):
 
-    def test_build_config_preamble(self):
-        exp_conf = [
-            '',
-            'vrrp_script ha_health_check_1 {',
-            '    script "/etc/ha_confs/qrouter-x/ha_check_script_1.sh"',
-            '    interval 5',
-            '    fall 2',
-            '    rise 2',
-            '}',
-            '']
-        ts = keepalived.KeepalivedTrackScript(
-            VRRP_INTERVAL, '/etc/ha_confs/qrouter-x', VRRP_ID)
-        self.assertEqual(exp_conf, ts.build_config_preamble())
-
     def test_get_config_str(self):
-        ts = keepalived.KeepalivedTrackScript(
+        cfg.CONF.set_override('keepalived_use_no_track', False)
+        config = keepalived.KeepalivedConf()
+        expected = KEEPALIVED_GLOBAL_CONFIG + \
+            KEEPALIVED_TRACK_SCRIPT + \
+            KEEPALIVED_VR_1_CONFIG + \
+            KEEPALIVED_VR_1_VIP + \
+            KEEPALIVED_VR_1_VRTS_B.format(notrk='') + \
+            KEEPALIVED_VR_1_TRACK_SCRIPT + \
+            KEEPALIVED_VR_2_CLOSE
+
+        instance = keepalived.KeepalivedInstance(
+            'MASTER', 'eth0', VRRP_ID, ['169.254.192.0/18'])
+        instance.track_script = keepalived.KeepalivedTrackScript(
             VRRP_INTERVAL, '/etc/ha_confs/qrouter-x', VRRP_ID)
-        ts.routes = [
+        instance.virtual_routes.gateway_routes = [
             keepalived.KeepalivedVirtualRoute('12.0.0.0/24', '10.0.0.1'), ]
-        self.assertEqual('''    track_script {
-        ha_health_check_1
-    }''', ts.get_config_str())
+        config.add_instance(instance)
+        self.assertEqual(expected, config.get_config_str())
 
     def test_get_script_str(self):
         ts = keepalived.KeepalivedTrackScript(

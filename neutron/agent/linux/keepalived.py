@@ -17,6 +17,7 @@ import itertools
 import os
 import signal
 
+import jinja2
 import netaddr
 from neutron_lib import constants
 from neutron_lib import exceptions
@@ -38,6 +39,7 @@ KEEPALIVED_EMAIL_FROM = 'neutron@openstack.local'
 KEEPALIVED_ROUTER_ID = 'neutron'
 GARP_PRIMARY_DELAY = 60
 HEALTH_CHECK_NAME = 'ha_health_check'
+J2_TEMPLATE = 'keepalived.conf.j2'
 
 LOG = logging.getLogger(__name__)
 SIGTERM_TIMEOUT = 5
@@ -157,12 +159,6 @@ class KeepalivedInstanceRoutes(object):
     def __len__(self):
         return len(self.routes)
 
-    def build_config(self):
-        return itertools.chain(['    virtual_routes {'],
-                               ('        %s' % route.build_config()
-                                for route in self.routes),
-                               ['    }'])
-
 
 class KeepalivedInstance(object):
     """Instance section of a keepalived configuration."""
@@ -229,12 +225,6 @@ class KeepalivedInstance(object):
         return [vip.ip_address for vip in self.vips
                 if vip.interface_name == interface_name]
 
-    def _build_track_interface_config(self):
-        return itertools.chain(
-            ['    track_interface {'],
-            ('        %s' % i for i in self.track_interfaces),
-            ['    }'])
-
     def get_primary_vip(self):
         """Return an address in the primary_vip_range CIDR, with the router's
         VRID in the host section.
@@ -249,7 +239,10 @@ class KeepalivedInstance(object):
               self.vrouter_id)
         return str(netaddr.IPNetwork('%s/%s' % (ip, PRIMARY_VIP_RANGE_SIZE)))
 
-    def _build_vips_config(self):
+    def get_primary_vip_config(self):
+        """Return the virtualip_addresses config line for the primary vip
+        for the keepalived config file
+        """
         # NOTE(amuller): The primary VIP must be consistent in order to avoid
         # keepalived bugs. Changing the VIP in the 'virtual_ipaddress' and
         # SIGHUP'ing keepalived can remove virtual routers, including the
@@ -261,81 +254,21 @@ class KeepalivedInstance(object):
         # primary VIP. The other VIPs (Internal interfaces IPs, the external
         # interface IP and floating IPs) are placed in the
         # virtual_ipaddress_excluded section.
-
         primary = KeepalivedVipAddress(self.get_primary_vip(), self.interface)
-        vips_result = ['    virtual_ipaddress {',
-                       '        %s' % primary.build_config(),
-                       '    }']
+        return primary.build_config()
 
-        if self.vips:
-            vips_result.extend(
-                itertools.chain(['    virtual_ipaddress_excluded {'],
-                                ('        %s' % vip.build_config()
-                                 for vip in
-                                 sorted(self.vips,
-                                        key=lambda vip: vip.ip_address)),
-                                ['    }']))
-
-        return vips_result
-
-    def _build_virtual_routes_config(self):
-        return itertools.chain(['    virtual_routes {'],
-                               ('        %s' % route.build_config()
-                                for route in self.virtual_routes),
-                               ['    }'])
-
-    def build_config(self):
-        if self.track_script:
-            config = self.track_script.build_config_preamble()
-            self.track_script.routes = self.virtual_routes.gateway_routes
-            self.track_script.vips = self.vips
-        else:
-            config = []
-
-        config.extend(['vrrp_instance %s {' % self.name,
-                       '    state %s' % self.state,
-                       '    interface %s' % self.interface,
-                       '    virtual_router_id %s' % self.vrouter_id,
-                       '    priority %s' % self.priority,
-                       '    garp_master_delay %s' % self.garp_primary_delay])
-
-        if self.nopreempt:
-            config.append('    nopreempt')
-
-        if self.advert_int:
-            config.append('    advert_int %s' % self.advert_int)
-
-        if self.authentication:
-            auth_type, password = self.authentication
-            authentication = ['    authentication {',
-                              '        auth_type %s' % auth_type,
-                              '        auth_pass %s' % password,
-                              '    }']
-            config.extend(authentication)
-
-        if self.mcast_src_ip:
-            config.append('    mcast_src_ip %s' % self.mcast_src_ip)
-
-        if self.track_interfaces:
-            config.extend(self._build_track_interface_config())
-
-        config.extend(self._build_vips_config())
-
-        if len(self.virtual_routes):
-            config.extend(self.virtual_routes.build_config())
-
-        if self.track_script:
-            config.extend(self.track_script.build_config())
-
-        config.append('}')
-
-        return config
+    def get_vips_sorted(self):
+        return sorted(self.vips, key=lambda vip: vip.ip_address)
 
 
 class KeepalivedConf(object):
     """A keepalived configuration."""
 
     def __init__(self):
+        j2_template_path = cfg.CONF.keepalived_templates_path
+        j2_loader = jinja2.FileSystemLoader(searchpath=j2_template_path)
+        j2_env = jinja2.Environment(loader=j2_loader, autoescape=True)
+        self.j2_template = j2_env.get_template(J2_TEMPLATE)
         self.reset()
 
     def reset(self):
@@ -347,24 +280,20 @@ class KeepalivedConf(object):
     def get_instance(self, vrouter_id):
         return self.instances.get(vrouter_id)
 
-    def build_config(self):
-        config = ['global_defs {',
-                  '    notification_email_from %s' % KEEPALIVED_EMAIL_FROM,
-                  '    router_id %s' % KEEPALIVED_ROUTER_ID,
-                  '}'
-                  ]
-
-        for instance in self.instances.values():
-            config.extend(instance.build_config())
-
-        return config
-
     def get_config_str(self):
         """Generates and returns the keepalived configuration.
-
         :return: Keepalived configuration string.
         """
-        return '\n'.join(self.build_config())
+        for i in self.instances.values():
+            if i.track_script:
+                i.track_script.routes = i.virtual_routes.gateway_routes
+                i.track_script.vips = i.vips
+
+        return '%s' % self.j2_template.render(
+                             email_from=KEEPALIVED_EMAIL_FROM,
+                             router_id=KEEPALIVED_ROUTER_ID,
+                             instances=self.instances.values(),
+                             health_check_name=HEALTH_CHECK_NAME)
 
 
 class KeepalivedManager(object):
@@ -514,7 +443,7 @@ class KeepalivedManager(object):
         return callback
 
 
-class KeepalivedTrackScript(KeepalivedConf):
+class KeepalivedTrackScript(object):
     """Track script generator for Keepalived"""
 
     def __init__(self, interval, conf_dir, vr_id):
@@ -524,34 +453,12 @@ class KeepalivedTrackScript(KeepalivedConf):
         self.routes = []
         self.vips = []
 
-    def build_config_preamble(self):
-        config = ['',
-                  'vrrp_script %s_%s {' % (HEALTH_CHECK_NAME, self.vr_id),
-                  '    script "%s"' % self._get_script_location(),
-                  '    interval %s' % self.interval,
-                  '    fall 2',
-                  '    rise 2',
-                  '}',
-                  '']
-
-        return config
-
     def _is_needed(self):
         """Check if track script is needed by checking amount of routes.
 
         :return: True/False
         """
         return len(self.routes) > 0
-
-    def build_config(self):
-        if not self._is_needed():
-            return ''
-
-        config = ['    track_script {',
-                  '        %s_%s' % (HEALTH_CHECK_NAME, self.vr_id),
-                  '    }']
-
-        return config
 
     def build_script(self):
         return itertools.chain(['#!/bin/bash -eu'],
